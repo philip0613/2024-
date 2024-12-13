@@ -1,0 +1,110 @@
+import asyncio  # 비동기 I/O 처리를 위한 모듈
+from pyppeteer import launch  # 웹 스크래핑을 위한 모듈
+import pandas as pd  # 판다스 라이브러리
+from collections import Counter  # Counter 클래스
+import matplotlib.pyplot as plt  # matplotlib 라이브러리
+from wordcloud import WordCloud  # 워드클라우드 생성을 위한 WordCloud 모듈
+import re  # 정규표현식을 사용하기 위한 re 모듈
+import matplotlib.font_manager as fm  # 폰트를 설정하기 위한 모듈
+
+# 한글 폰트 경로 설정 (NanumGothicBold 폰트 사용)
+font_path = '/Users/seoyumin/Desktop/나눔 글꼴/나눔고딕/NanumFontSetup_TTF_GOTHIC/NanumGothicBold.ttf'  # 폰트 경로 설정
+font_prop = fm.FontProperties(fname=font_path)  # 설정된 폰트 경로로 FontProperties 객체 생성
+plt.rc('font', family=font_prop.get_name())  # matplotlib에서 기본 폰트를 해당 폰트로 설정
+
+# 뉴스 제목과 링크 추출
+async def get_news():
+    browser = await launch(headless=False)  # Pyppeteer로 브라우저를 실행, headless=False는 브라우저 창을 표시
+    page = await browser.newPage()  # 새로운 페이지를 생성
+
+    # 네이버 뉴스 메인 페이지로 이동
+    url = "https://news.naver.com/section/100"  # 스크래핑할 원하는 네이버 뉴스 URL
+    await page.goto(url)  # 해당 URL로 브라우저를 이동
+
+    # 타임아웃 시간 증가
+    await page.waitForSelector('a', timeout=60000)  # 네트워크 지연 대비(최대 60초 대기)
+
+    # 뉴스 제목과 링크 추출
+    news_titles = []  # 뉴스 제목과 링크를 저장할 리스트 초기화
+    items = await page.querySelectorAll('a')  # 페이지의 모든 a 태그 선택
+    for item in items:
+        # 제목과 링크 추출
+        title = await page.evaluate('(element) => element.innerText', item)  # 해당 a 태그의 뉴스 제목 추출
+        link = await page.evaluate('(element) => element.href', item)  # 해당 a 태그의 링크 추출
+
+        if title and link.startswith('https://news.naver.com'):  # 링크가 네이버 뉴스로 시작하고 제목이 있는 경우
+            news_titles.append((title, link))  # 제목과 링크를 리스트에 추가
+
+    await browser.close()  # 브라우저 종료
+
+    return news_titles  # 뉴스 제목과 링크 리스트 반환
+
+# 뉴스 제목 데이터를 가져옴
+news_titles = asyncio.get_event_loop().run_until_complete(get_news())  # 비동기 함수 get_news() 호출 및 완료될 때까지 대기
+
+# 3. 뉴스 제목이 제대로 추출되었는지 확인
+if not news_titles:  # 뉴스 제목이 없는 경우
+    print("No news titles found.")  # 뉴스 제목이 없다는 메시지 출력
+else:  # 뉴스 제목이 있는 경우
+    for title, link in news_titles:  # 추출된 제목과 링크를 순회
+        print(f"Title: {title}, Link: {link}")  # 제목과 링크를 출력
+
+# DataFrame으로 정리 및 CSV 저장
+df = pd.DataFrame(news_titles, columns=['title', 'url'])  # 추출된 뉴스 데이터를 DataFrame으로 변환
+df.to_csv('naver_news.csv', index=False, encoding='utf-8-sig')  # CSV 파일로 저장
+
+# 불용어 설정
+stopwords = {'이', '의', '에', '가', '를', '은', '는', '과', '와', '다', '것', '수', '들', '그', '등', '더', '로', '합니다', '더보기', '개의', '관련뉴스','헤드라인', '신문보기', '본문', '오피니언', '뉴스', '정치일반', '안내', '접수해주세요'}
+# 분석에서 제외할 불용어
+
+# 텍스트 처리 및 단어 추출 함수 정의
+def clean_and_tokenize(text):
+    text = re.sub(r'[^\w\s]', '', text)  # 정규표현식을 사용하여 텍스트에서 구두점 제거
+    tokens = text.split()  # 공백을 기준으로 단어 분리
+    return [word for word in tokens if word not in stopwords and len(word) > 1]  # 불용어 제외, 1글자 이하 단어 제외
+
+# 뉴스 제목에서 단어 추출
+words = []  # 단어를 저장할 리스트 초기화
+for title in df['title']:  # DataFrame의 각 뉴스 제목에 대해
+    words.extend(clean_and_tokenize(title))  # 제목을 처리한 후 단어를 리스트에 추가
+
+# 단어 빈도 분석
+counter = Counter(words)  # Counter를 이용하여 단어 빈도 계산
+
+# 원하는 단어와 빈도수를 설정
+desired_words = {"조국":3, "한동훈": 4,"북한":2, "김주애": 1, "대통령실":2, "야당": 3, "우크라이나":1, "트럼프": 2, "트뤼도":2, "아이오닉9": 1 }  # 추가랑하고 싶은 단어와 빈도
+counter.update(desired_words)  # Counter에 새 단어를 추가
+
+# 상위 20개 단어 추출하고 막대 그래프 그리기
+common_words = counter.most_common(20)  # 가장 빈도가 높은 상위 20개의 단어 추출
+if common_words:  # 상위 20개 단어가 있는 경우
+    words, counts = zip(*common_words)  # 단어와 빈도를 각각 분리
+    plt.figure(figsize=(10, 6))  # 그래프 크기 설정
+    plt.bar(words, counts, color='skyblue')  # 막대 그래프 생성
+    plt.xticks(rotation=45, fontproperties=font_prop)  # X축 레이블 회전 및 폰트 설정
+    plt.title("상위 20개 자주 등장하는 단어", fontproperties=font_prop)  # 그래프 제목 설정
+    plt.xlabel("단어", fontproperties=font_prop)  # X축 레이블 설정
+    plt.ylabel("빈도수", fontproperties=font_prop)  # Y축 레이블 설정
+    plt.tight_layout()  # 레이아웃 조정
+    plt.show()  # 그래프 표시
+
+# 워드클라우드 생성
+if words:  # 단어가 있는 경우
+    wordcloud = WordCloud(
+        width=800,  # 워드클라우드 너비 설정
+        height=600,  # 워드클라우드 높이 설정
+        background_color='white',  # 배경색 설정
+        font_path=font_path  # 나눔고딕 Bold 폰트 경로 설정
+    ).generate_from_frequencies(counter)  # 단어 빈도수를 바탕으로 워드클라우드 생성
+
+    # 워드클라우드 시각화
+    plt.figure(figsize=(10, 8))  # 워드클라우드 크기 설정
+    plt.imshow(wordcloud, interpolation='bilinear')  # 워드클라우드 이미지를 표시
+    plt.axis('off')  # 축 제거
+    plt.tight_layout()  # 레이아웃 조정
+    plt.show()  # 워드클라우드 표시
+
+    # 워드클라우드 이미지 저장
+    wordcloud.to_file("wordcloud.png")  # 워드클라우드를 이미지 파일로 저장
+else:
+    print("No words available for word cloud.")  # 단어가 없을 경우 메시지 출력
